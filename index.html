@@ -38,6 +38,21 @@
   #controls.collapsed{display:none}
   #controlsToggle{background:#0b0d12}
 
+  /* Custom ComboBox (Suche im Dropdown) */
+  .combo{position:relative; min-width:220px}
+  .combo-input{width:100%}
+  .combo-menu{
+    position:absolute; top:100%; left:0; right:0; max-height:220px; overflow:auto;
+    background:#0b0d12; border:1px solid #242a33; border-radius:8px; padding:4px; z-index:50; display:none;
+  }
+  .combo.open .combo-menu{display:block}
+  .combo-item{
+    padding:6px 8px; border-radius:6px; cursor:pointer; font-size:14px;
+    display:flex; justify-content:space-between; gap:8px;
+  }
+  .combo-item:hover, .combo-item.active{background:#111620}
+  .combo-empty{color:#9aa7b2; padding:6px 8px; font-size:12px}
+
   /* Tabelle */
   #tableWrap{margin-top:14px;background:#0c0f14;border:1px solid #20252e;border-radius:10px;overflow:auto}
   table{border-collapse:collapse;width:100%}
@@ -66,7 +81,7 @@
     #cmpChart{height:220px}
   }
 </style>
-  <link rel="manifest" href="/manifest.webmanifest?v=3">
+<link rel="manifest" href="/manifest.webmanifest?v=3">
 <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png">
 <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png">
@@ -106,18 +121,14 @@ if ('serviceWorker' in navigator) {
           </select>
         </div>
 
-        <div class="group" title="Paar suchen & wählen (nur verfügbare Binance-Paare)">
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <div style="display:flex;gap:6px;align-items:center">
-              <label for="pairFilter">Suche</label>
-              <input id="pairFilter" placeholder="Name/Symbol filtern…" size="16" />
-            </div>
-            <div style="display:flex;gap:6px;align-items:center">
-              <label for="pairSelect">Paar</label>
-              <select id="pairSelect" size="6" style="min-width:180px"></select>
-              <button id="addPair" class="primary">Hinzufügen</button>
-            </div>
+        <!-- NEU: ComboBox mit Suche im Dropdown für Paare -->
+        <div class="group" title="Paar suchen & wählen (alle Börsen, live filter)">
+          <label for="pairInput">Paar</label>
+          <div class="combo" id="pairCombo">
+            <input id="pairInput" class="combo-input" placeholder="z. B. BTCUSDT" autocomplete="off"/>
+            <div id="pairMenu" class="combo-menu" role="listbox"></div>
           </div>
+          <button id="addPair" class="primary">Hinzufügen</button>
         </div>
 
         <div class="group" title="Kerzen-/Abtast-Intervall">
@@ -184,7 +195,7 @@ if ('serviceWorker' in navigator) {
 <footer class="wrap">
   <div class="hint">
     Steuerung: Pinch/Mausrad = Zoom · Ziehen = Pan · Doppeltipp = Reset (iOS).<br/>
-    Daten: Binance Spot Klines. Nur handelbare Paare der gewählten Quote.
+    Daten: Binance + CryptoCompare (automatisch gemergt). Nur handelbare Paare der gewählten Quote.
   </div>
 </footer>
 
@@ -225,8 +236,11 @@ if ('serviceWorker' in navigator) {
   const controlsToggle = $('#controlsToggle');
 
   const quoteEl = $('#quote');
-  const pairFilterEl = $('#pairFilter');
-  const pairSelectEl = $('#pairSelect');
+
+  // Neue Combo-UI
+  const pairCombo = $('#pairCombo');
+  const pairInput = $('#pairInput');
+  const pairMenu  = $('#pairMenu');
   const addBtn = $('#addPair');
 
   const intervalEl = $('#interval');
@@ -272,22 +286,22 @@ if ('serviceWorker' in navigator) {
   const fsCmpClose = $('#fsCmpClose');
   const fsCmpChartEl = $('#fsCmpChart');
 
-  let exchangeInfo = null;
-  let charts = []; // [{symbol, container, chart, series:{...}, data:[], pricePrecision}]
+  let exchangeInfo = null;      // Binance exchangeInfo
+  let allPairs = [];            // Aus allen Quellen aggregiert (Namen im Binance-Format, z.B. BTCUSDT)
+  let charts = [];              // [{symbol, container, chart, series:{...}, data:[], pricePrecision}]
   let cmpChart = null;
   let cmpFSChart = null;
   let fsMode = 'all';
   let fsIndex = 0;
   let parked = [];
 
-  // Helpers
+  // ===== Helpers =====
   const setStatus = (msg, err=false)=>{
     statusEl.textContent = msg;
     statusEl.style.color = err ? getCss('--danger') : getCss('--muted');
   };
   const sleep = ms => new Promise(r=>setTimeout(r,ms));
   const toMs = s => ({'1m':60e3,'5m':300e3,'15m':900e3,'1h':3600e3,'4h':14400e3,'1d':86400e3,'1w':604800e3}[s]||3600e3);
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
   function parseDateInput(d){
     if(!d) return null;
@@ -371,37 +385,99 @@ if ('serviceWorker' in navigator) {
     return {upper:outU, middle:outM, lower:outL};
   }
 
-  // Binance
+  // ===== Symbol Utils =====
+  function splitSymbol(binanceSym){
+    // "BTCUSDT" -> {base:"BTC", quote:"USDT"}
+    const q = ['USDT','USD','BTC','ETH','BUSD','EUR','TRY','USDC'];
+    for(const qq of q){
+      if(binanceSym.endsWith(qq)) return {base:binanceSym.slice(0, binanceSym.length-qq.length), quote:qq};
+    }
+    // fallback
+    return {base:binanceSym.slice(0,3), quote:binanceSym.slice(3)};
+  }
+  function ccInterval(interval){
+    if(interval==='1m' || interval==='5m' || interval==='15m') return 'histominute';
+    if(interval==='1h' || interval==='4h') return 'histohour';
+    return 'histoday';
+  }
+  function ccLimit(interval, startMs, endMs){
+    const step = toMs(interval);
+    const span = (endMs||Date.now()) - (startMs|| (Date.now()-30*86400e3));
+    const n = Math.ceil(span/step)+5;
+    return Math.min(Math.max(n, 10), 2000);
+  }
+
+  // ===== Quellen =====
   async function loadExchangeInfo(){
     if(exchangeInfo) return exchangeInfo;
     setStatus('Lade Binance-Paare …');
     const res = await fetch('https://api.binance.com/api/v3/exchangeInfo');
     if(!res.ok){ setStatus('Fehler exchangeInfo: '+res.status,true); return null; }
     exchangeInfo = await res.json();
-    setStatus('Paare geladen.');
+    // Aggregiere globale Liste (vorerst Binance-Basis, da robust & vollständig)
+    allPairs = exchangeInfo.symbols
+      .filter(s=> s.status==='TRADING')
+      .map(s=> s.symbol);
+    setStatus(`Paare geladen (${allPairs.length}).`);
     return exchangeInfo;
   }
 
-  function refreshPairsList(){
-    pairSelectEl.innerHTML = '';
-    if(!exchangeInfo) return;
+  function refreshPairsMenu(){
     const q = quoteEl.value;
-    const term = (pairFilterEl.value||'').trim().toLowerCase();
-    const list = exchangeInfo.symbols
-      .filter(s=> s.status==='TRADING' && s.quoteAsset===q)
-      .map(s=> s.symbol)
+    const term = (pairInput.value||'').trim().toLowerCase();
+    const list = allPairs
+      .filter(sym => sym.endsWith(q))
       .filter(sym => term ? sym.toLowerCase().includes(term) : true)
-      .sort();
-    for(const sym of list){
-      const opt = document.createElement('option');
-      opt.value = sym;
-      opt.textContent = sym;
-      pairSelectEl.appendChild(opt);
+      .sort()
+      .slice(0, 400); // mobile performance
+
+    pairMenu.innerHTML = '';
+    if(!list.length){
+      const div = document.createElement('div');
+      div.className='combo-empty';
+      div.textContent='Keine Treffer';
+      pairMenu.appendChild(div);
+      return;
     }
-    setStatus(`Quote ${q}: ${list.length} Paare`);
+    list.forEach((sym, i)=>{
+      const item = document.createElement('div');
+      item.className = 'combo-item' + (i===0?' active':'');
+      item.dataset.value = sym;
+      const {base,quote} = splitSymbol(sym);
+      item.innerHTML = `<span>${sym}</span><span style="color:#9aa7b2;font-size:12px">${base}·${quote}</span>`;
+      item.addEventListener('mousedown', (ev)=>{ // mousedown, damit blur nicht vorher schließt
+        ev.preventDefault();
+        pairInput.value = sym;
+        closeCombo();
+      });
+      pairMenu.appendChild(item);
+    });
   }
 
-  async function fetchKlines(symbol, interval, startMs, endMs){
+  function openCombo(){
+    pairCombo.classList.add('open');
+    refreshPairsMenu();
+  }
+  function closeCombo(){
+    pairCombo.classList.remove('open');
+  }
+  pairInput.addEventListener('focus', openCombo);
+  pairInput.addEventListener('input', refreshPairsMenu);
+  document.addEventListener('click', (e)=>{
+    if(!pairCombo.contains(e.target)) closeCombo();
+  });
+  pairInput.addEventListener('keydown', (e)=>{
+    const items = Array.from(pairMenu.querySelectorAll('.combo-item'));
+    if(!items.length) return;
+    let idx = items.findIndex(n=>n.classList.contains('active'));
+    if(e.key==='ArrowDown'){ idx = Math.min(idx+1, items.length-1); items.forEach(n=>n.classList.remove('active')); items[idx].classList.add('active'); e.preventDefault(); }
+    if(e.key==='ArrowUp'){ idx = Math.max(idx-1, 0); items.forEach(n=>n.classList.remove('active')); items[idx].classList.add('active'); e.preventDefault(); }
+    if(e.key==='Enter'){ pairInput.value = items[idx].dataset.value; closeCombo(); e.preventDefault(); }
+    if(e.key==='Escape'){ closeCombo(); }
+  });
+
+  // --- Binance Klines
+  async function fetchBinanceKlines(symbol, interval, startMs, endMs){
     const base = 'https://api.binance.com/api/v3/klines';
     const limit = 1000;
     let start = startMs, out=[];
@@ -428,6 +504,58 @@ if ('serviceWorker' in navigator) {
       time: Math.floor(k[0]/1000),
       open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5]
     }));
+  }
+
+  // --- CryptoCompare (Fallback/Ergänzung)
+  async function fetchCC(symbol, interval, startMs, endMs){
+    try{
+      const {base, quote} = splitSymbol(symbol);
+      const table = ccInterval(interval); // histominute/histohour/histoday
+      const limit = ccLimit(interval, startMs, endMs);
+      const url = new URL(`https://min-api.cryptocompare.com/data/v2/${table}`);
+      url.searchParams.set('fsym', base);
+      url.searchParams.set('tsym', quote);
+      url.searchParams.set('limit', String(limit));
+      if(endMs) url.searchParams.set('toTs', Math.floor(endMs/1000));
+      const res = await fetch(url.toString());
+      if(!res.ok) throw new Error('CC HTTP '+res.status);
+      const js = await res.json();
+      if(js.Response!=='Success' || !js.Data || !js.Data.Data) return [];
+      // CC liefert OHLC + time (Sekunden)
+      return js.Data.Data.map(r=>({
+        time: r.time,
+        open: +r.open, high:+r.high, low:+r.low, close:+r.close, volume:+(r.volumeto||r.volumefrom||0)
+      }));
+    }catch(e){ console.warn('CC fail', e); return []; }
+  }
+
+  // --- Merge: priorisiere Binance, ergänze Lücken mit CC
+  function mergeCandles(primary, secondary){
+    if(!secondary || !secondary.length) return primary.slice();
+    const map = new Map();
+    for(const c of secondary){ map.set(c.time, c); }
+    const out = [];
+    const seen = new Set();
+    for(const c of primary){
+      out.push(c);
+      seen.add(c.time);
+      if(map.has(c.time)) map.delete(c.time); // Duplikat ignorieren (Binance gewinnt)
+    }
+    // Sekundärdaten hinzufügen, aber sortiert
+    for(const [t, c] of map){ if(!seen.has(t)) out.push(c); }
+    out.sort((a,b)=>a.time-b.time);
+    return out;
+  }
+
+  // — Multi-Source Fetcher
+  async function fetchKlinesMulti(symbol, interval, startMs, endMs){
+    const [bin, cc] = await Promise.all([
+      fetchBinanceKlines(symbol, interval, startMs, endMs).catch(()=>[]),
+      fetchCC(symbol, interval, startMs, endMs).catch(()=>[])
+    ]);
+    const merged = mergeCandles(bin, cc);
+    if(!merged.length) throw new Error(`Keine Daten für ${symbol} aus Quellen.`);
+    return merged;
   }
 
   function createPane(symbol){
@@ -489,7 +617,6 @@ if ('serviceWorker' in navigator) {
   }
 
   function attachSync(entry){
-    // sync time scales
     let suppress = false;
     entry.chart.timeScale().subscribeVisibleLogicalRangeChange(range=>{
       if(suppress) return;
@@ -499,10 +626,7 @@ if ('serviceWorker' in navigator) {
       });
       suppress = false;
     });
-    // double tap = reset this chart
-    entry.chart.subscribeClick(()=>{
-      entry.chart.timeScale().fitContent();
-    });
+    entry.chart.subscribeClick(()=>{ entry.chart.timeScale().fitContent(); });
     window.addEventListener('resize', ()=> {
       const el = entry.container.querySelector('.pane-body');
       entry.chart.applyOptions({ width: el.clientWidth });
@@ -542,8 +666,8 @@ if ('serviceWorker' in navigator) {
   async function loadPaneData(entry){
     const {startMs, endMs} = computeRangeMs();
     const interval = intervalEl.value;
-    setStatus(`Lade ${entry.symbol} …`);
-    const data = await fetchKlines(entry.symbol, interval, startMs, endMs);
+    setStatus(`Lade ${entry.symbol} (Multi-Source) …`);
+    const data = await fetchKlinesMulti(entry.symbol, interval, startMs, endMs);
     if(!data.length) throw new Error(`Keine Daten für ${entry.symbol}.`);
     entry.data = data;
 
@@ -557,7 +681,6 @@ if ('serviceWorker' in navigator) {
     entry.series.line.setData(closes);
     entry.series.vol.setData(volume);
 
-    // Indicators
     entry.series.ma20.setData(sma(data,20));
     entry.series.ma50.setData(sma(data,50));
     entry.series.ema20.setData(ema(data,20));
@@ -567,10 +690,8 @@ if ('serviceWorker' in navigator) {
     entry.series.bbM.setData(bb.middle);
     entry.series.bbL.setData(bb.lower);
 
-    // precision
     applyPriceFormat(entry, data[data.length-1].close);
-
-    setStatus(`Fertig: ${entry.symbol} · ${interval} · ${data.length} Kerzen`);
+    setStatus(`Fertig: ${entry.symbol} · ${interval} · ${data.length} Kerzen (gemergt)`);
   }
 
   async function reloadAll(){
@@ -583,10 +704,8 @@ if ('serviceWorker' in navigator) {
     buildTableAndCompare();
   }
 
-  // Gemeinsamer Reset: gleicher Zeitbereich für alle
   function fitAllSync(){
     if(!charts.length) return;
-    // Zeit-Min/Max über alle Daten
     let tMin = Infinity, tMax = -Infinity;
     charts.forEach(c=>{
       if(c.data.length){
@@ -615,27 +734,26 @@ if ('serviceWorker' in navigator) {
           ema20: showEMA20El.checked, ema50: showEMA50El.checked, bb: showBBEl.checked, vol: showVolEl.checked
         }
       };
-      localStorage.setItem('kca_state_v3', JSON.stringify(st));
+      localStorage.setItem('kca_state_v4', JSON.stringify(st));
     }catch(e){}
   }
   function restoreState(){
     try{
-      const raw = localStorage.getItem('kca_state_v3');
+      const raw = localStorage.getItem('kca_state_v4');
       if(!raw) return null;
       return JSON.parse(raw);
     }catch(e){ return null; }
   }
 
-  // ===== Sampling & Tabelle/Compare =====
+  // ===== Tabelle & Vergleich =====
+  function toMsInterval(){ return toMs(intervalEl.value); }
   function getBucketTimes(){
-    const step = toMs(intervalEl.value);
+    const step = toMsInterval();
     const {startMs, endMs} = computeRangeMs();
-    // Start auf Intervallkante ausrichten (UTC)
     let t0;
     if(startMs!=null){
       t0 = Math.floor(startMs/step)*step;
     } else {
-      // wenn "Max": ab frühestem Zeitpunkt aller Daten
       let earliest = Infinity;
       charts.forEach(c=>{ if(c.data.length) earliest = Math.min(earliest, c.data[0].time*1000); });
       if(!isFinite(earliest)) return [];
@@ -646,27 +764,21 @@ if ('serviceWorker' in navigator) {
     for(let t=t0; t<=t1; t+=step){ times.push(Math.floor(t/1000)); }
     return times;
   }
-
-  // Liefert für jeden Bucket die letzte bekannte Close <= Bucketzeit
   function sampleCloses(data, bucketTimes){
     const result = new Array(bucketTimes.length).fill(null);
     let j = 0, lastClose = null;
     for(let i=0;i<bucketTimes.length;i++){
       const T = bucketTimes[i];
       while(j < data.length && data[j].time <= T){
-        lastClose = data[j].close;
-        j++;
+        lastClose = data[j].close; j++;
       }
       result[i] = (lastClose!=null)? lastClose : null;
     }
     return result;
   }
-
   function buildTableAndCompare(){
     const times = getBucketTimes();
     if(!times.length){ perfHeadRow.innerHTML=''; perfBody.innerHTML=''; return; }
-
-    // Header
     perfHeadRow.innerHTML = '';
     const thCoin = document.createElement('th'); thCoin.textContent = 'Coin'; perfHeadRow.appendChild(thCoin);
     const thStart = document.createElement('th'); thStart.textContent = 'Startpreis'; perfHeadRow.appendChild(thStart);
@@ -676,16 +788,13 @@ if ('serviceWorker' in navigator) {
       th.textContent = dt.toISOString().replace('T',' ').slice(0,16); // UTC
       perfHeadRow.appendChild(th);
     }
-
     perfBody.innerHTML = '';
     const seriesForCmp = [];
-
     for(const c of charts){
       const row = document.createElement('tr');
       const name = document.createElement('th'); name.textContent = c.symbol; row.appendChild(name);
 
       const sampled = sampleCloses(c.data, times);
-      // finde ersten gültigen Startpreis
       let firstIdx = sampled.findIndex(v=>v!=null);
       let startPrice = (firstIdx>=0)? sampled[firstIdx] : null;
 
@@ -695,7 +804,6 @@ if ('serviceWorker' in navigator) {
 
       const cmpPoints = [];
       let prev = startPrice;
-
       for(let i=1;i<times.length;i++){
         const v = sampled[i];
         const td = document.createElement('td');
@@ -704,18 +812,15 @@ if ('serviceWorker' in navigator) {
           td.textContent = pct.toFixed(2);
           td.className = (pct>=0) ? 'pos' : 'neg';
           cmpPoints.push({time: times[i], value: +pct.toFixed(4)});
-          prev = v; // nächstes Intervall vergleicht gegen dieses
+          prev = v;
         } else {
           td.textContent = '-';
         }
         row.appendChild(td);
       }
-
       perfBody.appendChild(row);
       seriesForCmp.push({symbol:c.symbol, data:cmpPoints});
     }
-
-    // Vergleichs-Chart bauen
     buildCompareChart(seriesForCmp);
   }
 
@@ -734,7 +839,6 @@ if ('serviceWorker' in navigator) {
       ls.setData(s.data);
     });
   }
-
   function buildCompareFS(seriesList){
     if(cmpFSChart){ cmpFSChart.remove(); cmpFSChart=null; }
     cmpFSChart = LightweightCharts.createChart(fsCmpChartEl, {
@@ -829,16 +933,16 @@ if ('serviceWorker' in navigator) {
     persistState();
   });
 
-  pairFilterEl.addEventListener('input', refreshPairsList);
-  quoteEl.addEventListener('change', ()=>{ refreshPairsList(); persistState(); });
+  quoteEl.addEventListener('change', ()=>{ refreshPairsMenu(); persistState(); });
 
   addBtn.addEventListener('click', async ()=>{
     try{
-      const sym = pairSelectEl.value?.trim().toUpperCase();
+      const sym = (pairInput.value||'').trim().toUpperCase();
       if(!sym){ setStatus('Bitte ein Paar auswählen.', true); return; }
+      if(!allPairs.includes(sym) || !sym.endsWith(quoteEl.value)){
+        setStatus(`Paar ${sym} mit Quote ${quoteEl.value} nicht verfügbar.`, true); return;
+      }
       if(charts.find(c=>c.symbol===sym)){ setStatus(`${sym} ist bereits hinzugefügt.`); return; }
-      const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset===quoteEl.value);
-      if(!ok){ setStatus(`Paar ${sym} mit Quote ${quoteEl.value} nicht verfügbar.`, true); return; }
       const entry = createPane(sym);
       await loadPaneData(entry);
       fitAllSync();
@@ -864,23 +968,9 @@ if ('serviceWorker' in navigator) {
   fitBtn.addEventListener('click', ()=>{ fitAllSync(); });
   reloadBtn.addEventListener('click', ()=>{ reloadAll().catch(e=>setStatus('Fehler: '+e.message,true)); });
 
-  // Fullscreen header buttons
-  fsAllBtn.addEventListener('click', ()=> openFs('all'));
-  fsSingleBtn.addEventListener('click', ()=> openFs('single'));
-  fsPrevBtn.addEventListener('click', fsPrev);
-  fsNextBtn.addEventListener('click', fsNext);
-  fsCloseBtn.addEventListener('click', closeFs);
-  // Fullscreen overlay controls
-  fsModeAllBtn.addEventListener('click', renderFsAll);
-  fsModeSingleBtn.addEventListener('click', renderFsSingle);
-  fsPrev2.addEventListener('click', fsPrev);
-  fsNext2.addEventListener('click', fsNext);
-  fsClose2.addEventListener('click', closeFs);
-
   // Compare chart controls
   cmpReloadBtn.addEventListener('click', buildTableAndCompare);
   cmpFSBtn.addEventListener('click', ()=>{
-    // baue FS-Chart mit aktuellen Tabellendaten
     const times = getBucketTimes();
     const seriesForCmp = [];
     for(const c of charts){
@@ -905,11 +995,11 @@ if ('serviceWorker' in navigator) {
     if(cmpFSChart){ cmpFSChart.remove(); cmpFSChart=null; }
   });
 
-  // Init
+  // ===== Init =====
   (async function init(){
     try{
-      await loadExchangeInfo();
-      refreshPairsList();
+      await loadExchangeInfo();          // füllt allPairs (Binance)
+      refreshPairsMenu();
 
       const st = restoreState();
       if(st){
@@ -929,11 +1019,10 @@ if ('serviceWorker' in navigator) {
           showBBEl.checked = !!st.toggles.bb;
           showVolEl.checked = !!st.toggles.vol;
         }
-        refreshPairsList();
+        refreshPairsMenu();
         if(Array.isArray(st.symbols) && st.symbols.length){
           for(const sym of st.symbols){
-            const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset===quoteEl.value);
-            if(ok){
+            if(allPairs.includes(sym)){
               const e = createPane(sym);
               await loadPaneData(e);
             }
@@ -941,27 +1030,19 @@ if ('serviceWorker' in navigator) {
           fitAllSync();
           buildTableAndCompare();
         } else {
-          // Defaults
-          const defaults = ['BTCUSDT','ETHUSDT'];
+          const defaults = ['BTCUSDT','ETHUSDT'].filter(s=>allPairs.includes(s));
           for(const sym of defaults){
-            const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset==='USDT');
-            if(ok){
-              const e = createPane(sym);
-              await loadPaneData(e);
-            }
+            const e = createPane(sym);
+            await loadPaneData(e);
           }
           fitAllSync();
           buildTableAndCompare();
         }
       } else {
-        // Defaults
-        const defaults = ['BTCUSDT','ETHUSDT'];
+        const defaults = ['BTCUSDT','ETHUSDT'].filter(s=>allPairs.includes(s));
         for(const sym of defaults){
-          const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset==='USDT');
-          if(ok){
-            const e = createPane(sym);
-            await loadPaneData(e);
-          }
+          const e = createPane(sym);
+          await loadPaneData(e);
         }
         fitAllSync();
         buildTableAndCompare();
@@ -973,7 +1054,7 @@ if ('serviceWorker' in navigator) {
       }), 300); });
 
       applyVisibility();
-
+      setStatus('Bereit.');
     }catch(e){
       console.error(e);
       setStatus('Init-Fehler: '+(e?.message||e), true);
