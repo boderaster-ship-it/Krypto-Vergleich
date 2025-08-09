@@ -65,6 +65,13 @@
     .pane-body{height:200px}
     #cmpChart{height:220px}
   }
+  <link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js'));
+}
+</script>
 </style>
 </head>
 <body>
