@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Krypto Multi-Compare Pro – Single File</title>
+<style>
+  :root{
+    --bg:#0f1115;--panel:#171a21;--accent:#4aa3ff;--text:#e6ecf2;--muted:#9aa7b2;--grid:#242a33;
+    --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  body{margin:0;background:var(--bg);color:var(--text)}
+  header{position:sticky;top:0;background:linear-gradient(180deg,var(--panel),rgba(23,26,33,.7));backdrop-filter:saturate(140%) blur(8px);z-index:100;border-bottom:1px solid #20252e}
+  .wrap{max-width:1200px;margin:0 auto;padding:10px 14px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .group{display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--panel);border:1px solid #20252e;border-radius:10px;padding:8px 10px}
+  label{font-size:12px;color:var(--muted)}
+  select,input,button{background:#0b0d12;color:var(--text);border:1px solid #242a33;border-radius:8px;padding:8px 10px;font-size:14px}
+  button{cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08111c}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .toggles{display:flex;gap:8px;align-items:center}
+  .toggle{display:flex;gap:6px;align-items:center;padding:4px 8px;background:#0b0d12;border:1px solid #242a33;border-radius:20px;font-size:13px}
+  #status{font-size:12px;color:var(--muted);padding:8px 2px}
+  #panes{display:flex;flex-direction:column;gap:8px;min-height:50vh}
+  .pane{background:#0c0f14;border:1px solid #20252e;border-radius:10px;padding:6px}
+  .pane-header{display:flex;align-items:center;gap:8px;padding:4px 6px 8px 6px}
+  .badge{font-size:12px;color:#c9d4de;background:#111620;border:1px solid #20252e;border-radius:6px;padding:2px 6px}
+  .pane-actions{margin-left:auto;display:flex;gap:6px}
+  .remove,.fsBtn{background:transparent;border:1px solid #2b3340;border-radius:6px;padding:4px 8px}
+  .pane-body{height:240px}
+  .hint{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+
+  /* Collapsible controls */
+  #controls.collapsed{display:none}
+  #controlsToggle{background:#0b0d12}
+
+  /* Tabelle */
+  #tableWrap{margin-top:14px;background:#0c0f14;border:1px solid #20252e;border-radius:10px;overflow:auto}
+  table{border-collapse:collapse;width:100%}
+  thead th{position:sticky;top:0;background:#111620;border-bottom:1px solid #20252e;padding:6px 8px;font-size:12px;color:#cfd8e3;white-space:nowrap}
+  tbody td, tbody th{border-bottom:1px solid #20252e;padding:6px 8px;font-size:12px;white-space:nowrap}
+  tbody th{text-align:left;color:#cfd8e3;background:#0f141c}
+  td.pos{color:#9ae6b4} td.neg{color:#feb2b2}
+
+  #cmpWrap{margin-top:10px;background:#0c0f14;border:1px solid #20252e;border-radius:10px;padding:8px}
+  #cmpHeader{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  #cmpChart{height:260px}
+
+  /* Fullscreen Overlay */
+  .overlay{position:fixed;inset:0;background:#000;z-index:1000;display:none;flex-direction:column}
+  .overlay.show{display:flex}
+  .overlayBar{display:flex;gap:8px;align-items:center;padding:10px;background:#0b0d12;border-bottom:1px solid #20252e}
+  .overlayBody{flex:1;display:grid;gap:8px;padding:8px;overflow:auto}
+  .grid2{grid-template-columns:repeat(2,1fr)}
+  .gridAdaptive{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+  .grid2x2{grid-template-columns:repeat(2,1fr);grid-auto-rows:minmax(200px,1fr)}
+  .fsSingle{display:flex;justify-content:center;align-items:center}
+  .fsPane{background:#0c0f14;border:1px solid #20252e;border-radius:10px;padding:6px;min-height:60vh}
+
+  @media (max-width:640px){
+    .pane-body{height:200px}
+    #cmpChart{height:220px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between">
+      <button id="controlsToggle" class="ghost">⚙️ Einstellungen ausblenden</button>
+      <div class="group" title="Ansicht & Aktualisieren">
+        <button id="fit" class="ghost">Reset</button>
+        <button id="reload" class="ghost">Neu laden</button>
+        <button id="fsAll" class="primary">Vollbild (alle)</button>
+        <button id="fsSingle" class="ghost">Einzel</button>
+        <button id="fsPrev" class="ghost" disabled>◀︎</button>
+        <button id="fsNext" class="ghost" disabled>▶︎</button>
+        <button id="fsClose" class="ghost" disabled>Schließen</button>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="row" style="margin-top:8px">
+        <div class="group" title="Quote wählen">
+          <label for="quote">Quote</label>
+          <select id="quote">
+            <option value="USDT" selected>USDT</option>
+            <option value="BTC">BTC</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </div>
+
+        <div class="group" title="Paar suchen & wählen (nur verfügbare Binance-Paare)">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;gap:6px;align-items:center">
+              <label for="pairFilter">Suche</label>
+              <input id="pairFilter" placeholder="Name/Symbol filtern…" size="16" />
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <label for="pairSelect">Paar</label>
+              <select id="pairSelect" size="6" style="min-width:180px"></select>
+              <button id="addPair" class="primary">Hinzufügen</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="group" title="Kerzen-/Abtast-Intervall">
+          <label for="interval">Intervall</label>
+          <select id="interval">
+            <option>1m</option><option>5m</option><option>15m</option>
+            <option selected>1h</option><option>4h</option><option>1d</option><option>1w</option>
+          </select>
+        </div>
+
+        <div class="group" title="Zeitraum">
+          <label>Range</label>
+          <select id="range">
+            <option value="1">1 Tag</option>
+            <option value="7">7 Tage</option>
+            <option value="30" selected>30 Tage</option>
+            <option value="90">90 Tage</option>
+            <option value="180">180 Tage</option>
+            <option value="365">365 Tage</option>
+            <option value="max">Max</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input type="date" id="start" />
+          <input type="date" id="end" />
+        </div>
+
+        <div class="group toggles" title="Chart-Inhalte (global)">
+          <span class="toggle"><input type="checkbox" id="showLine"><label for="showLine">Close-Line</label></span>
+          <span class="toggle"><input type="checkbox" id="showCandles" checked><label for="showCandles">Candles</label></span>
+          <span class="toggle"><input type="checkbox" id="showMA20" checked><label for="showMA20">MA20</label></span>
+          <span class="toggle"><input type="checkbox" id="showMA50"><label for="showMA50">MA50</label></span>
+          <span class="toggle"><input type="checkbox" id="showEMA20"><label for="showEMA20">EMA20</label></span>
+          <span class="toggle"><input type="checkbox" id="showEMA50"><label for="showEMA50">EMA50</label></span>
+          <span class="toggle"><input type="checkbox" id="showBB"><label for="showBB">Boll(20,2)</label></span>
+          <span class="toggle"><input type="checkbox" id="showVol" checked><label for="showVol">Volume</label></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="status" class="hint">Wähle Quote → suche Paar → „Hinzufügen“. Alle Einstellungen wirken global auf alle Charts. Doppeltipp auf ein Chart: Reset dieses Charts.</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="panes"></div>
+
+  <div id="tableWrap">
+    <table id="perfTable">
+      <thead><tr id="perfHeadRow"></tr></thead>
+      <tbody id="perfBody"></tbody>
+    </table>
+  </div>
+
+  <div id="cmpWrap">
+    <div id="cmpHeader">
+      <span class="badge">Vergleichs-Chart (Δ% je Intervall)</span>
+      <button id="cmpReload" class="ghost">Neu berechnen</button>
+      <button id="cmpFS" class="ghost">Vollbild</button>
+    </div>
+    <div id="cmpChart"></div>
+  </div>
+</div>
+
+<footer class="wrap">
+  <div class="hint">
+    Steuerung: Pinch/Mausrad = Zoom · Ziehen = Pan · Doppeltipp = Reset (iOS).<br/>
+    Daten: Binance Spot Klines. Nur handelbare Paare der gewählten Quote.
+  </div>
+</footer>
+
+<!-- Fullscreen Overlay für alle/Einzel-Chart -->
+<div id="fsOverlay" class="overlay">
+  <div class="overlayBar">
+    <button id="fsModeAll" class="primary">Alle</button>
+    <button id="fsModeSingle" class="ghost">Einzel</button>
+    <button id="fsPrev2" class="ghost">◀︎</button>
+    <button id="fsNext2" class="ghost">▶︎</button>
+    <button id="fsClose2" class="ghost">Schließen</button>
+  </div>
+  <div id="fsGrid" class="overlayBody"></div>
+</div>
+
+<!-- Fullscreen Overlay für Vergleichs-Chart -->
+<div id="fsCmp" class="overlay">
+  <div class="overlayBar">
+    <span class="badge">Vergleich Δ%</span>
+    <button id="fsCmpClose" class="ghost">Schließen</button>
+  </div>
+  <div id="fsCmpBody" class="overlayBody fsSingle">
+    <div id="fsCmpPane" class="fsPane"><div id="fsCmpChart" style="height:70vh"></div></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const getCss = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+
+  const statusEl = $('#status');
+  const panesEl = $('#panes');
+
+  // Controls
+  const controls = $('#controls');
+  const controlsToggle = $('#controlsToggle');
+
+  const quoteEl = $('#quote');
+  const pairFilterEl = $('#pairFilter');
+  const pairSelectEl = $('#pairSelect');
+  const addBtn = $('#addPair');
+
+  const intervalEl = $('#interval');
+  const rangeEl = $('#range');
+  const startEl = $('#start');
+  const endEl = $('#end');
+
+  const showLineEl = $('#showLine');
+  const showCandlesEl = $('#showCandles');
+  const showMA20El = $('#showMA20');
+  const showMA50El = $('#showMA50');
+  const showEMA20El = $('#showEMA20');
+  const showEMA50El = $('#showEMA50');
+  const showBBEl = $('#showBB');
+  const showVolEl = $('#showVol');
+
+  const fitBtn = $('#fit');
+  const reloadBtn = $('#reload');
+
+  // Fullscreen controls
+  const fsAllBtn = $('#fsAll');
+  const fsSingleBtn = $('#fsSingle');
+  const fsPrevBtn = $('#fsPrev');
+  const fsNextBtn = $('#fsNext');
+  const fsCloseBtn = $('#fsClose');
+  const fsOverlay = $('#fsOverlay');
+  const fsGrid = $('#fsGrid');
+  const fsModeAllBtn = $('#fsModeAll');
+  const fsModeSingleBtn = $('#fsModeSingle');
+  const fsPrev2 = $('#fsPrev2');
+  const fsNext2 = $('#fsNext2');
+  const fsClose2 = $('#fsClose2');
+
+  // Compare chart + table
+  const perfHeadRow = $('#perfHeadRow');
+  const perfBody = $('#perfBody');
+  const cmpReloadBtn = $('#cmpReload');
+  const cmpFSBtn = $('#cmpFS');
+  const cmpChartEl = $('#cmpChart');
+
+  // Compare fullscreen
+  const fsCmp = $('#fsCmp');
+  const fsCmpClose = $('#fsCmpClose');
+  const fsCmpChartEl = $('#fsCmpChart');
+
+  let exchangeInfo = null;
+  let charts = []; // [{symbol, container, chart, series:{...}, data:[], pricePrecision}]
+  let cmpChart = null;
+  let cmpFSChart = null;
+  let fsMode = 'all';
+  let fsIndex = 0;
+  let parked = [];
+
+  // Helpers
+  const setStatus = (msg, err=false)=>{
+    statusEl.textContent = msg;
+    statusEl.style.color = err ? getCss('--danger') : getCss('--muted');
+  };
+  const sleep = ms => new Promise(r=>setTimeout(r,ms));
+  const toMs = s => ({'1m':60e3,'5m':300e3,'15m':900e3,'1h':3600e3,'4h':14400e3,'1d':86400e3,'1w':604800e3}[s]||3600e3);
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+
+  function parseDateInput(d){
+    if(!d) return null;
+    const t = new Date(d+"T00:00:00Z");
+    return isNaN(+t) ? null : +t;
+  }
+
+  function computeRangeMs(){
+    const range = rangeEl.value;
+    let startMs=null, endMs=Date.now();
+    if(range==='custom'){
+      startMs = parseDateInput(startEl.value);
+      endMs = parseDateInput(endEl.value) || Date.now();
+      if(!startMs) throw new Error('Bitte gültiges Start-Datum setzen.');
+      if(startMs>=endMs) throw new Error('Start muss vor Ende liegen.');
+    } else if(range==='max'){
+      startMs = null;
+    } else {
+      const days = parseInt(range||30,10);
+      startMs = Date.now() - days*86400e3;
+    }
+    return {startMs, endMs};
+  }
+
+  function autoPrecision(lastPrice){
+    if(!(lastPrice>0)) return {precision:2, minMove:0.01};
+    let p = 2;
+    if(lastPrice >= 1) p = 2;
+    else if(lastPrice >= 0.1) p = 4;
+    else if(lastPrice >= 0.01) p = 5;
+    else if(lastPrice >= 0.001) p = 6;
+    else if(lastPrice >= 0.000001) p = 8;
+    else p = 9;
+    return {precision:p, minMove: Number((1/Math.pow(10,p)).toFixed(p))};
+  }
+
+  function sma(arr, period){
+    const out = new Array(arr.length);
+    let sum=0;
+    for(let i=0;i<arr.length;i++){
+      sum += arr[i].close;
+      if(i>=period) sum -= arr[i-period].close;
+      out[i] = (i>=period-1) ? {time:arr[i].time, value:+(sum/period).toFixed(8)} : {time:arr[i].time, value:NaN};
+    }
+    return out;
+  }
+  function ema(arr, period){
+    const out = new Array(arr.length);
+    if(!arr.length) return [];
+    const k = 2/(period+1);
+    let prev = arr[0].close;
+    out[0] = {time:arr[0].time, value:prev};
+    for(let i=1;i<arr.length;i++){
+      const val = arr[i].close*k + prev*(1-k);
+      out[i] = {time:arr[i].time, value:+val.toFixed(8)};
+      prev = val;
+    }
+    return out;
+  }
+  function bollinger(arr, period=20, mult=2){
+    const mid = sma(arr,period);
+    const outU=[], outM=[], outL=[];
+    for(let i=0;i<arr.length;i++){
+      if(i<period-1){
+        outU.push({time:arr[i].time, value:NaN});
+        outM.push({time:arr[i].time, value:NaN});
+        outL.push({time:arr[i].time, value:NaN});
+      } else {
+        let mean = mid[i].value;
+        let sumSq=0;
+        for(let j=i-period+1;j<=i;j++){
+          const d = arr[j].close - mean;
+          sumSq += d*d;
+        }
+        const sd = Math.sqrt(sumSq/period);
+        outU.push({time:arr[i].time, value:+(mean+mult*sd).toFixed(8)});
+        outM.push({time:arr[i].time, value:+(mean).toFixed(8)});
+        outL.push({time:arr[i].time, value:+(mean-mult*sd).toFixed(8)});
+      }
+    }
+    return {upper:outU, middle:outM, lower:outL};
+  }
+
+  // Binance
+  async function loadExchangeInfo(){
+    if(exchangeInfo) return exchangeInfo;
+    setStatus('Lade Binance-Paare …');
+    const res = await fetch('https://api.binance.com/api/v3/exchangeInfo');
+    if(!res.ok){ setStatus('Fehler exchangeInfo: '+res.status,true); return null; }
+    exchangeInfo = await res.json();
+    setStatus('Paare geladen.');
+    return exchangeInfo;
+  }
+
+  function refreshPairsList(){
+    pairSelectEl.innerHTML = '';
+    if(!exchangeInfo) return;
+    const q = quoteEl.value;
+    const term = (pairFilterEl.value||'').trim().toLowerCase();
+    const list = exchangeInfo.symbols
+      .filter(s=> s.status==='TRADING' && s.quoteAsset===q)
+      .map(s=> s.symbol)
+      .filter(sym => term ? sym.toLowerCase().includes(term) : true)
+      .sort();
+    for(const sym of list){
+      const opt = document.createElement('option');
+      opt.value = sym;
+      opt.textContent = sym;
+      pairSelectEl.appendChild(opt);
+    }
+    setStatus(`Quote ${q}: ${list.length} Paare`);
+  }
+
+  async function fetchKlines(symbol, interval, startMs, endMs){
+    const base = 'https://api.binance.com/api/v3/klines';
+    const limit = 1000;
+    let start = startMs, out=[];
+    for(let guard=0; guard<20; guard++){
+      const url = new URL(base);
+      url.searchParams.set('symbol', symbol);
+      url.searchParams.set('interval', interval);
+      url.searchParams.set('limit', limit);
+      if(start) url.searchParams.set('startTime', start);
+      if(endMs)  url.searchParams.set('endTime', endMs);
+      const res = await fetch(url.toString());
+      if(!res.ok) throw new Error('Binance HTTP '+res.status);
+      const chunk = await res.json();
+      if(!Array.isArray(chunk) || chunk.length===0) break;
+      out = out.concat(chunk);
+      const lastOpenTime = chunk[chunk.length-1][0];
+      const next = lastOpenTime + toMs(interval);
+      if(endMs && next>=endMs) break;
+      if(chunk.length < limit) break;
+      start = next;
+      await sleep(120);
+    }
+    return out.map(k=>({
+      time: Math.floor(k[0]/1000),
+      open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5]
+    }));
+  }
+
+  function createPane(symbol){
+    const container = document.createElement('div');
+    container.className = 'pane';
+    container.innerHTML = `
+      <div class="pane-header">
+        <span class="badge">${symbol}</span>
+        <div class="pane-actions">
+          <button class="fsBtn" title="Vollbild Einzel">FS</button>
+          <button class="remove" title="Entfernen">Entfernen</button>
+        </div>
+      </div>
+      <div class="pane-body"></div>
+    `;
+    panesEl.appendChild(container);
+
+    const body = container.querySelector('.pane-body');
+    const chart = LightweightCharts.createChart(body, {
+      layout:{ background:{ type:'solid', color:'#0c0f14' }, textColor:getCss('--text') },
+      grid:{ vertLines:{ color:getCss('--grid') }, horzLines:{ color:getCss('--grid') } },
+      rightPriceScale:{ borderColor:'#222831' },
+      timeScale:{ borderColor:'#222831', timeVisible:true, secondsVisible:false },
+      crosshair:{ mode: LightweightCharts.CrosshairMode.Magnet },
+    });
+
+    const candleSeries = chart.addCandlestickSeries();
+    const lineSeries = chart.addLineSeries({ priceLineVisible:false, lastValueVisible:true });
+    const volSeries = chart.addHistogramSeries({ priceFormat:{ type:'volume' }, priceScaleId:'left', lastValueVisible:false });
+
+    const ma20 = chart.addLineSeries({ priceLineVisible:false });
+    const ma50 = chart.addLineSeries({ priceLineVisible:false });
+    const ema20s = chart.addLineSeries({ priceLineVisible:false });
+    const ema50s = chart.addLineSeries({ priceLineVisible:false });
+    const bbU = chart.addLineSeries({ priceLineVisible:false });
+    const bbM = chart.addLineSeries({ priceLineVisible:false });
+    const bbL = chart.addLineSeries({ priceLineVisible:false });
+
+    const series = {candles:candleSeries, line:lineSeries, vol:volSeries, ma20, ma50, ema20:ema20s, ema50:ema50s, bbU, bbM, bbL};
+
+    container.querySelector('.remove').addEventListener('click', ()=>{
+      chart.remove();
+      panesEl.removeChild(container);
+      charts = charts.filter(c=>c.symbol!==symbol);
+      buildTableAndCompare(); persistState();
+      setStatus(`${symbol} entfernt.`);
+    });
+    container.querySelector('.fsBtn').addEventListener('click', ()=>{
+      openFs('single');
+      const idx = charts.findIndex(c=>c.symbol===symbol);
+      if(idx>=0){ fsIndex = idx; renderFsSingle(); }
+    });
+
+    const entry = {symbol, container, chart, series, data:[], pricePrecision:2};
+    charts.push(entry);
+    attachSync(entry);
+    applyVisibility();
+    return entry;
+  }
+
+  function attachSync(entry){
+    // sync time scales
+    let suppress = false;
+    entry.chart.timeScale().subscribeVisibleLogicalRangeChange(range=>{
+      if(suppress) return;
+      suppress = true;
+      charts.forEach(c=>{
+        if(c!==entry && range) c.chart.timeScale().setVisibleLogicalRange({from:range.from, to:range.to});
+      });
+      suppress = false;
+    });
+    // double tap = reset this chart
+    entry.chart.subscribeClick(()=>{
+      entry.chart.timeScale().fitContent();
+    });
+    window.addEventListener('resize', ()=> {
+      const el = entry.container.querySelector('.pane-body');
+      entry.chart.applyOptions({ width: el.clientWidth });
+    });
+  }
+
+  function applyPriceFormat(entry, lastClose){
+    const pf = autoPrecision(lastClose);
+    entry.pricePrecision = pf.precision;
+    const fmt = { type:'price', precision: pf.precision, minMove: pf.minMove };
+    entry.series.candles.applyOptions({ priceFormat: fmt });
+    entry.series.line.applyOptions({ priceFormat: fmt });
+    entry.series.ma20.applyOptions({ priceFormat: fmt });
+    entry.series.ma50.applyOptions({ priceFormat: fmt });
+    entry.series.ema20.applyOptions({ priceFormat: fmt });
+    entry.series.ema50.applyOptions({ priceFormat: fmt });
+    entry.series.bbU.applyOptions({ priceFormat: fmt });
+    entry.series.bbM.applyOptions({ priceFormat: fmt });
+    entry.series.bbL.applyOptions({ priceFormat: fmt });
+  }
+
+  function applyVisibility(){
+    charts.forEach(e=>{
+      e.series.candles.applyOptions({ visible: showCandlesEl.checked });
+      e.series.line.applyOptions({ visible: showLineEl.checked });
+      e.series.ma20.applyOptions({ visible: showMA20El.checked });
+      e.series.ma50.applyOptions({ visible: showMA50El.checked });
+      e.series.ema20.applyOptions({ visible: showEMA20El.checked });
+      e.series.ema50.applyOptions({ visible: showEMA50El.checked });
+      e.series.bbU.applyOptions({ visible: showBBEl.checked });
+      e.series.bbM.applyOptions({ visible: showBBEl.checked });
+      e.series.bbL.applyOptions({ visible: showBBEl.checked });
+      e.series.vol.applyOptions({ visible: showVolEl.checked });
+    });
+  }
+
+  async function loadPaneData(entry){
+    const {startMs, endMs} = computeRangeMs();
+    const interval = intervalEl.value;
+    setStatus(`Lade ${entry.symbol} …`);
+    const data = await fetchKlines(entry.symbol, interval, startMs, endMs);
+    if(!data.length) throw new Error(`Keine Daten für ${entry.symbol}.`);
+    entry.data = data;
+
+    const closes = data.map(c=>({time:c.time, value:c.close}));
+    const volume = data.map(c=>({
+      time:c.time, value:c.volume,
+      color: c.close>=c.open ? 'rgba(46,204,113,0.7)' : 'rgba(243,156,18,0.7)'
+    }));
+
+    entry.series.candles.setData(data);
+    entry.series.line.setData(closes);
+    entry.series.vol.setData(volume);
+
+    // Indicators
+    entry.series.ma20.setData(sma(data,20));
+    entry.series.ma50.setData(sma(data,50));
+    entry.series.ema20.setData(ema(data,20));
+    entry.series.ema50.setData(ema(data,50));
+    const bb = bollinger(data,20,2);
+    entry.series.bbU.setData(bb.upper);
+    entry.series.bbM.setData(bb.middle);
+    entry.series.bbL.setData(bb.lower);
+
+    // precision
+    applyPriceFormat(entry, data[data.length-1].close);
+
+    setStatus(`Fertig: ${entry.symbol} · ${interval} · ${data.length} Kerzen`);
+  }
+
+  async function reloadAll(){
+    if(!charts.length){ setStatus('Keine Paare ausgewählt.'); return; }
+    for(const c of charts){
+      await loadPaneData(c);
+      await sleep(40);
+    }
+    fitAllSync();
+    buildTableAndCompare();
+  }
+
+  // Gemeinsamer Reset: gleicher Zeitbereich für alle
+  function fitAllSync(){
+    if(!charts.length) return;
+    // Zeit-Min/Max über alle Daten
+    let tMin = Infinity, tMax = -Infinity;
+    charts.forEach(c=>{
+      if(c.data.length){
+        tMin = Math.min(tMin, c.data[0].time);
+        tMax = Math.max(tMax, c.data[c.data.length-1].time);
+      }
+    });
+    if(!isFinite(tMin) || !isFinite(tMax)) return;
+    charts.forEach(c=>{
+      c.chart.timeScale().setVisibleRange({ from: tMin, to: tMax });
+    });
+  }
+
+  function persistState(){
+    try{
+      const st = {
+        controlsCollapsed: controls.classList.contains('collapsed'),
+        quote: quoteEl.value,
+        interval: intervalEl.value,
+        range: rangeEl.value,
+        start: startEl.value || '',
+        end: endEl.value || '',
+        symbols: charts.map(c=>c.symbol),
+        toggles:{
+          line: showLineEl.checked, candles: showCandlesEl.checked, ma20: showMA20El.checked, ma50: showMA50El.checked,
+          ema20: showEMA20El.checked, ema50: showEMA50El.checked, bb: showBBEl.checked, vol: showVolEl.checked
+        }
+      };
+      localStorage.setItem('kca_state_v3', JSON.stringify(st));
+    }catch(e){}
+  }
+  function restoreState(){
+    try{
+      const raw = localStorage.getItem('kca_state_v3');
+      if(!raw) return null;
+      return JSON.parse(raw);
+    }catch(e){ return null; }
+  }
+
+  // ===== Sampling & Tabelle/Compare =====
+  function getBucketTimes(){
+    const step = toMs(intervalEl.value);
+    const {startMs, endMs} = computeRangeMs();
+    // Start auf Intervallkante ausrichten (UTC)
+    let t0;
+    if(startMs!=null){
+      t0 = Math.floor(startMs/step)*step;
+    } else {
+      // wenn "Max": ab frühestem Zeitpunkt aller Daten
+      let earliest = Infinity;
+      charts.forEach(c=>{ if(c.data.length) earliest = Math.min(earliest, c.data[0].time*1000); });
+      if(!isFinite(earliest)) return [];
+      t0 = Math.floor(earliest/step)*step;
+    }
+    const t1 = endMs || Date.now();
+    const times = [];
+    for(let t=t0; t<=t1; t+=step){ times.push(Math.floor(t/1000)); }
+    return times;
+  }
+
+  // Liefert für jeden Bucket die letzte bekannte Close <= Bucketzeit
+  function sampleCloses(data, bucketTimes){
+    const result = new Array(bucketTimes.length).fill(null);
+    let j = 0, lastClose = null;
+    for(let i=0;i<bucketTimes.length;i++){
+      const T = bucketTimes[i];
+      while(j < data.length && data[j].time <= T){
+        lastClose = data[j].close;
+        j++;
+      }
+      result[i] = (lastClose!=null)? lastClose : null;
+    }
+    return result;
+  }
+
+  function buildTableAndCompare(){
+    const times = getBucketTimes();
+    if(!times.length){ perfHeadRow.innerHTML=''; perfBody.innerHTML=''; return; }
+
+    // Header
+    perfHeadRow.innerHTML = '';
+    const thCoin = document.createElement('th'); thCoin.textContent = 'Coin'; perfHeadRow.appendChild(thCoin);
+    const thStart = document.createElement('th'); thStart.textContent = 'Startpreis'; perfHeadRow.appendChild(thStart);
+    for(let i=1;i<times.length;i++){
+      const th = document.createElement('th');
+      const dt = new Date(times[i]*1000);
+      th.textContent = dt.toISOString().replace('T',' ').slice(0,16); // UTC
+      perfHeadRow.appendChild(th);
+    }
+
+    perfBody.innerHTML = '';
+    const seriesForCmp = [];
+
+    for(const c of charts){
+      const row = document.createElement('tr');
+      const name = document.createElement('th'); name.textContent = c.symbol; row.appendChild(name);
+
+      const sampled = sampleCloses(c.data, times);
+      // finde ersten gültigen Startpreis
+      let firstIdx = sampled.findIndex(v=>v!=null);
+      let startPrice = (firstIdx>=0)? sampled[firstIdx] : null;
+
+      const tdStart = document.createElement('td');
+      tdStart.textContent = (startPrice!=null) ? startPrice.toFixed(c.pricePrecision) : '-';
+      row.appendChild(tdStart);
+
+      const cmpPoints = [];
+      let prev = startPrice;
+
+      for(let i=1;i<times.length;i++){
+        const v = sampled[i];
+        const td = document.createElement('td');
+        if(v!=null && prev!=null && prev>0){
+          const pct = ((v - prev)/prev)*100;
+          td.textContent = pct.toFixed(2);
+          td.className = (pct>=0) ? 'pos' : 'neg';
+          cmpPoints.push({time: times[i], value: +pct.toFixed(4)});
+          prev = v; // nächstes Intervall vergleicht gegen dieses
+        } else {
+          td.textContent = '-';
+        }
+        row.appendChild(td);
+      }
+
+      perfBody.appendChild(row);
+      seriesForCmp.push({symbol:c.symbol, data:cmpPoints});
+    }
+
+    // Vergleichs-Chart bauen
+    buildCompareChart(seriesForCmp);
+  }
+
+  function buildCompareChart(seriesList){
+    if(cmpChart){ cmpChart.remove(); cmpChart=null; }
+    cmpChart = LightweightCharts.createChart(cmpChartEl, {
+      layout:{ background:{ type:'solid', color:'#0c0f14' }, textColor:getCss('--text') },
+      grid:{ vertLines:{ color:getCss('--grid') }, horzLines:{ color:getCss('--grid') } },
+      rightPriceScale:{ borderColor:'#222831' },
+      timeScale:{ borderColor:'#222831', timeVisible:true, secondsVisible:false },
+      crosshair:{ mode: LightweightCharts.CrosshairMode.Magnet },
+    });
+    const palette = ['#4aa3ff','#2ecc71','#f39c12','#e74c3c','#9b59b6','#1abc9c','#e67e22','#e84393','#16a085','#d35400'];
+    seriesList.forEach((s,idx)=>{
+      const ls = cmpChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length] });
+      ls.setData(s.data);
+    });
+  }
+
+  function buildCompareFS(seriesList){
+    if(cmpFSChart){ cmpFSChart.remove(); cmpFSChart=null; }
+    cmpFSChart = LightweightCharts.createChart(fsCmpChartEl, {
+      layout:{ background:{ type:'solid', color:'#0c0f14' }, textColor:getCss('--text') },
+      grid:{ vertLines:{ color:getCss('--grid') }, horzLines:{ color:getCss('--grid') } },
+      rightPriceScale:{ borderColor:'#222831' },
+      timeScale:{ borderColor:'#222831', timeVisible:true, secondsVisible:false },
+      crosshair:{ mode: LightweightCharts.CrosshairMode.Magnet },
+    });
+    const palette = ['#4aa3ff','#2ecc71','#f39c12','#e74c3c','#9b59b6','#1abc9c','#e67e22','#e84393','#16a085','#d35400'];
+    seriesList.forEach((s,idx)=>{
+      const ls = cmpFSChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length] });
+      ls.setData(s.data);
+    });
+  }
+
+  // ===== Fullscreen handling =====
+  function openFs(mode){
+    if(!charts.length) return;
+    fsMode = mode; fsIndex = Math.max(0, Math.min(fsIndex, charts.length-1));
+    fsOverlay.classList.add('show');
+    fsCloseBtn.disabled = false; fsPrevBtn.disabled = (mode!=='single'); fsNextBtn.disabled = (mode!=='single');
+    $('#fsGrid').className = 'overlayBody';
+    parked = [];
+    charts.forEach(c=>{
+      parked.push({node:c.container, parent:panesEl});
+      fsGrid.appendChild(c.container);
+      const el = c.container.querySelector('.pane-body');
+      c.chart.applyOptions({ width: el.clientWidth });
+    });
+    if(mode==='all'){ renderFsAll(); } else { renderFsSingle(); }
+  }
+  function closeFs(){
+    if(!fsOverlay.classList.contains('show')) return;
+    parked.forEach(p=> p.parent.appendChild(p.node));
+    fsOverlay.classList.remove('show');
+    fsPrevBtn.disabled = true; fsNextBtn.disabled = true; fsCloseBtn.disabled = true;
+    charts.forEach(c=>{
+      const el = c.container.querySelector('.pane-body');
+      c.chart.applyOptions({ width: el.clientWidth });
+    });
+  }
+  function renderFsAll(){
+    fsMode = 'all';
+    fsModeAllBtn.classList.add('primary'); fsModeSingleBtn.classList.remove('primary');
+    fsPrev2.disabled = true; fsNext2.disabled = true;
+    fsPrevBtn.disabled = true; fsNextBtn.disabled = true;
+    const n = charts.length;
+    fsGrid.className = 'overlayBody';
+    if(n===1){
+      fsGrid.style.display='grid'; fsGrid.style.gridTemplateColumns='1fr';
+    } else if(n===2){
+      fsGrid.style.display='grid'; fsGrid.classList.add('grid2');
+    } else if(n===3){
+      fsGrid.style.display='grid'; fsGrid.style.gridTemplateColumns='1fr 1fr';
+      fsGrid.style.gridAutoRows='minmax(200px,1fr)';
+      charts.forEach((c,idx)=>{
+        const pane = c.container;
+        pane.style.gridColumn = ''; pane.style.gridRow = '';
+        if(idx===0){ pane.style.gridColumn='1 / 2'; pane.style.gridRow='1 / 3'; }
+        if(idx===1){ pane.style.gridColumn='2 / 3'; pane.style.gridRow='1 / 2'; }
+        if(idx===2){ pane.style.gridColumn='2 / 3'; pane.style.gridRow='2 / 3'; }
+      });
+      return;
+    } else if(n===4){
+      fsGrid.style.display='grid'; fsGrid.classList.add('grid2x2');
+    } else {
+      fsGrid.style.display='grid'; fsGrid.classList.add('gridAdaptive');
+    }
+    charts.forEach(c=>{ c.container.style.gridColumn=''; c.container.style.gridRow=''; });
+  }
+  function renderFsSingle(){
+    fsMode = 'single';
+    fsModeSingleBtn.classList.add('primary'); fsModeAllBtn.classList.remove('primary');
+    fsPrev2.disabled = false; fsNext2.disabled = false;
+    fsPrevBtn.disabled = false; fsNextBtn.disabled = false;
+    fsGrid.className = 'overlayBody fsSingle';
+    charts.forEach((c,i)=> c.container.style.display = (i===fsIndex)?'block':'none');
+    const cur = charts[fsIndex];
+    cur.container.style.display='block';
+    const el = cur.container.querySelector('.pane-body');
+    cur.chart.applyOptions({ width: el.clientWidth });
+  }
+  function fsNext(){ fsIndex = (fsIndex+1)%charts.length; renderFsSingle(); }
+  function fsPrev(){ fsIndex = (fsIndex-1+charts.length)%charts.length; renderFsSingle(); }
+
+  // ===== UI Wiring =====
+  controlsToggle.addEventListener('click', ()=>{
+    controls.classList.toggle('collapsed');
+    const collapsed = controls.classList.contains('collapsed');
+    controlsToggle.textContent = collapsed ? '⚙️ Einstellungen einblenden' : '⚙️ Einstellungen ausblenden';
+    persistState();
+  });
+
+  pairFilterEl.addEventListener('input', refreshPairsList);
+  quoteEl.addEventListener('change', ()=>{ refreshPairsList(); persistState(); });
+
+  addBtn.addEventListener('click', async ()=>{
+    try{
+      const sym = pairSelectEl.value?.trim().toUpperCase();
+      if(!sym){ setStatus('Bitte ein Paar auswählen.', true); return; }
+      if(charts.find(c=>c.symbol===sym)){ setStatus(`${sym} ist bereits hinzugefügt.`); return; }
+      const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset===quoteEl.value);
+      if(!ok){ setStatus(`Paar ${sym} mit Quote ${quoteEl.value} nicht verfügbar.`, true); return; }
+      const entry = createPane(sym);
+      await loadPaneData(entry);
+      fitAllSync();
+      buildTableAndCompare();
+      persistState();
+    }catch(e){ setStatus('Fehler: '+(e?.message||e), true); }
+  });
+
+  [showLineEl, showCandlesEl, showMA20El, showMA50El, showEMA20El, showEMA50El, showBBEl, showVolEl].forEach(el=>{
+    el.addEventListener('change', ()=>{ applyVisibility(); persistState(); });
+  });
+
+  [intervalEl, startEl, endEl, rangeEl].forEach(el=>{
+    el.addEventListener('change', ()=>{ 
+      const custom = rangeEl.value==='custom';
+      startEl.style.display = endEl.style.display = custom ? 'inline-block' : 'none';
+      reloadAll().catch(err=>setStatus('Fehler: '+(err?.message||err),true));
+      persistState();
+    });
+  });
+  (function(){ const custom = rangeEl.value==='custom'; startEl.style.display = endEl.style.display = custom ? 'inline-block' : 'none'; })();
+
+  fitBtn.addEventListener('click', ()=>{ fitAllSync(); });
+  reloadBtn.addEventListener('click', ()=>{ reloadAll().catch(e=>setStatus('Fehler: '+e.message,true)); });
+
+  // Fullscreen header buttons
+  fsAllBtn.addEventListener('click', ()=> openFs('all'));
+  fsSingleBtn.addEventListener('click', ()=> openFs('single'));
+  fsPrevBtn.addEventListener('click', fsPrev);
+  fsNextBtn.addEventListener('click', fsNext);
+  fsCloseBtn.addEventListener('click', closeFs);
+  // Fullscreen overlay controls
+  fsModeAllBtn.addEventListener('click', renderFsAll);
+  fsModeSingleBtn.addEventListener('click', renderFsSingle);
+  fsPrev2.addEventListener('click', fsPrev);
+  fsNext2.addEventListener('click', fsNext);
+  fsClose2.addEventListener('click', closeFs);
+
+  // Compare chart controls
+  cmpReloadBtn.addEventListener('click', buildTableAndCompare);
+  cmpFSBtn.addEventListener('click', ()=>{
+    // baue FS-Chart mit aktuellen Tabellendaten
+    const times = getBucketTimes();
+    const seriesForCmp = [];
+    for(const c of charts){
+      const sampled = sampleCloses(c.data, times);
+      let prev = sampled.find(v=>v!=null) ?? null;
+      const pts = [];
+      for(let i=1;i<times.length;i++){
+        const v = sampled[i];
+        if(v!=null && prev!=null && prev>0){
+          const pct = ((v - prev)/prev)*100;
+          pts.push({time:times[i], value:+pct.toFixed(4)});
+          prev = v;
+        }
+      }
+      seriesForCmp.push({symbol:c.symbol, data:pts});
+    }
+    fsCmp.classList.add('show');
+    buildCompareFS(seriesForCmp);
+  });
+  fsCmpClose.addEventListener('click', ()=>{
+    fsCmp.classList.remove('show');
+    if(cmpFSChart){ cmpFSChart.remove(); cmpFSChart=null; }
+  });
+
+  // Init
+  (async function init(){
+    try{
+      await loadExchangeInfo();
+      refreshPairsList();
+
+      const st = restoreState();
+      if(st){
+        if(st.controlsCollapsed){ controls.classList.add('collapsed'); controlsToggle.textContent = '⚙️ Einstellungen einblenden'; }
+        if(st.quote) quoteEl.value = st.quote;
+        if(st.interval) intervalEl.value = st.interval;
+        if(st.range) rangeEl.value = st.range;
+        if(st.start) startEl.value = st.start;
+        if(st.end) endEl.value = st.end;
+        if(st.toggles){
+          showLineEl.checked = !!st.toggles.line;
+          showCandlesEl.checked = !!st.toggles.candles;
+          showMA20El.checked = !!st.toggles.ma20;
+          showMA50El.checked = !!st.toggles.ma50;
+          showEMA20El.checked = !!st.toggles.ema20;
+          showEMA50El.checked = !!st.toggles.ema50;
+          showBBEl.checked = !!st.toggles.bb;
+          showVolEl.checked = !!st.toggles.vol;
+        }
+        refreshPairsList();
+        if(Array.isArray(st.symbols) && st.symbols.length){
+          for(const sym of st.symbols){
+            const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset===quoteEl.value);
+            if(ok){
+              const e = createPane(sym);
+              await loadPaneData(e);
+            }
+          }
+          fitAllSync();
+          buildTableAndCompare();
+        } else {
+          // Defaults
+          const defaults = ['BTCUSDT','ETHUSDT'];
+          for(const sym of defaults){
+            const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset==='USDT');
+            if(ok){
+              const e = createPane(sym);
+              await loadPaneData(e);
+            }
+          }
+          fitAllSync();
+          buildTableAndCompare();
+        }
+      } else {
+        // Defaults
+        const defaults = ['BTCUSDT','ETHUSDT'];
+        for(const sym of defaults){
+          const ok = exchangeInfo.symbols.some(s=> s.status==='TRADING' && s.symbol===sym && s.quoteAsset==='USDT');
+          if(ok){
+            const e = createPane(sym);
+            await loadPaneData(e);
+          }
+        }
+        fitAllSync();
+        buildTableAndCompare();
+      }
+
+      window.addEventListener('orientationchange', ()=>{ setTimeout(()=>charts.forEach(c=>{
+        const el = c.container.querySelector('.pane-body');
+        c.chart.applyOptions({ width: el.clientWidth });
+      }), 300); });
+
+      applyVisibility();
+
+    }catch(e){
+      console.error(e);
+      setStatus('Init-Fehler: '+(e?.message||e), true);
+    }
+  })();
+
+})();
+</script>
+</body>
+</html>
