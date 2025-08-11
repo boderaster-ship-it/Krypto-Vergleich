@@ -10,13 +10,14 @@
     --danger:#ff6b6b;
   }
   *{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-  body{margin:0;background:var(--bg);color:var(--text)}
+  html,body{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--text);touch-action:manipulation;overscroll-behavior-y:none}
   header{position:sticky;top:0;background:linear-gradient(180deg,var(--panel),rgba(23,26,33,.7));backdrop-filter:saturate(140%) blur(8px);z-index:100;border-bottom:1px solid #20252e}
   .wrap{max-width:1200px;margin:0 auto;padding:10px 14px}
   .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .group{display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--panel);border:1px solid #20252e;border-radius:10px;padding:8px 10px}
   label{font-size:12px;color:var(--muted)}
-  select,input,button{background:#0b0d12;color:var(--text);border:1px solid #242a33;border-radius:8px;padding:8px 10px;font-size:14px}
+  select,input,button{background:#0b0d12;color:var(--text);border:1px solid #242a33;border-radius:8px;padding:8px 10px;font-size:14px;-webkit-tap-highlight-color:transparent}
   button{cursor:pointer}
   button.primary{background:var(--accent);border-color:var(--accent);color:#08111c}
   button.ghost{background:transparent}
@@ -29,8 +30,9 @@
   .pane-header{display:flex;align-items:center;gap:8px;padding:4px 6px 8px 6px}
   .badge{font-size:12px;color:#c9d4de;background:#111620;border:1px solid #20252e;border-radius:6px;padding:2px 6px}
   .pane-actions{margin-left:auto;display:flex;gap:6px}
-  .remove,.fsBtn{background:transparent;border:1px solid #2b3340;border-radius:6px;padding:4px 8px}
+  .remove,.fsBtn{background:transparent;border:1px solid #2b3340;border-radius:6px;padding:8px 12px;min-height:36px}
   .pane-body{height:240px}
+  .pane-macd{height:80px;margin-top:4px}
   .hint{color:var(--muted);font-size:12px}
   .spacer{flex:1}
 
@@ -69,7 +71,7 @@
   .overlay{position:fixed;inset:0;background:#000;z-index:1000;display:none;flex-direction:column}
   .overlay.show{display:flex}
   .overlayBar{display:flex;gap:8px;align-items:center;padding:10px;background:#0b0d12;border-bottom:1px solid #20252e}
-  .overlayBody{flex:1;display:grid;gap:8px;padding:8px;overflow:auto}
+  .overlayBody{flex:1;display:grid;gap:8px;padding:8px;overflow:auto;-webkit-overflow-scrolling:touch}
   .grid2{grid-template-columns:repeat(2,1fr)}
   .gridAdaptive{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
   .grid2x2{grid-template-columns:repeat(2,1fr);grid-auto-rows:minmax(200px,1fr)}
@@ -79,6 +81,9 @@
   @media (max-width:640px){
     .pane-body{height:200px}
     #cmpChart{height:220px}
+    select,input,button{font-size:16px;padding:10px 12px}
+    .group{padding:6px 8px}
+    .combo{min-width:160px}
   }
 </style>
 <link rel="manifest" href="/manifest.webmanifest?v=3">
@@ -107,6 +112,7 @@ if ('serviceWorker' in navigator) {
         <button id="fsPrev" class="ghost" disabled>◀︎</button>
         <button id="fsNext" class="ghost" disabled>▶︎</button>
         <button id="fsClose" class="ghost" disabled>Schließen</button>
+        <button id="copyTable" class="ghost">Tabelle kopieren</button>
       </div>
     </div>
 
@@ -164,6 +170,7 @@ if ('serviceWorker' in navigator) {
           <span class="toggle"><input type="checkbox" id="showEMA50"><label for="showEMA50">EMA50</label></span>
           <span class="toggle"><input type="checkbox" id="showBB"><label for="showBB">Boll(20,2)</label></span>
           <span class="toggle"><input type="checkbox" id="showVol" checked><label for="showVol">Volume</label></span>
+          <span class="toggle"><input type="checkbox" id="showMACD" checked><label for="showMACD">MACD</label></span>
         </div>
       </div>
     </div>
@@ -256,9 +263,11 @@ if ('serviceWorker' in navigator) {
   const showEMA50El = $('#showEMA50');
   const showBBEl = $('#showBB');
   const showVolEl = $('#showVol');
+  const showMACDEl = $('#showMACD');
 
   const fitBtn = $('#fit');
   const reloadBtn = $('#reload');
+  const copyTableBtn = $('#copyTable');
 
   // Fullscreen controls
   const fsAllBtn = $('#fsAll');
@@ -288,12 +297,13 @@ if ('serviceWorker' in navigator) {
 
   let exchangeInfo = null;      // Binance exchangeInfo
   let allPairs = [];            // Aus allen Quellen aggregiert (Namen im Binance-Format, z.B. BTCUSDT)
-  let charts = [];              // [{symbol, container, chart, series:{...}, data:[], pricePrecision}]
+  let charts = [];              // [{symbol, container, chart, series:{...}, data:[], pricePrecision, macdChart?, macdSeries?}]
   let cmpChart = null;
   let cmpFSChart = null;
   let fsMode = 'all';
   let fsIndex = 0;
   let parked = [];
+  let lastTSV = ''; // Excel/Clipboard Export
 
   // ===== Helpers =====
   const setStatus = (msg, err=false)=>{
@@ -361,6 +371,31 @@ if ('serviceWorker' in navigator) {
     }
     return out;
   }
+  function emaOnValues(values, period){
+    if(!values.length) return [];
+    const k = 2/(period+1);
+    const out = new Array(values.length);
+    let prev = values[0];
+    out[0] = prev;
+    for(let i=1;i<values.length;i++){
+      prev = values[i]*k + prev*(1-k);
+      out[i] = prev;
+    }
+    return out;
+  }
+  function macdCalc(arr, fast=12, slow=26, signal=9){
+    const closes = arr.map(a=>a.close);
+    const ef = emaOnValues(closes, fast);
+    const es = emaOnValues(closes, slow);
+    const macd = ef.map((v,i)=> v-es[i]);
+    const signalArr = emaOnValues(macd, signal);
+    const hist = macd.map((v,i)=> v - signalArr[i]);
+    return {
+      macd: arr.map((d,i)=>({time:d.time, value:+(macd[i]??NaN).toFixed(8)})),
+      signal: arr.map((d,i)=>({time:d.time, value:+(signalArr[i]??NaN).toFixed(8)})),
+      hist: arr.map((d,i)=>({time:d.time, value:+(hist[i]??NaN).toFixed(8), color: (hist[i]>=0)? 'rgba(46,204,113,0.7)' : 'rgba(239,83,80,0.7)'}))
+    };
+  }
   function bollinger(arr, period=20, mult=2){
     const mid = sma(arr,period);
     const outU=[], outM=[], outL=[];
@@ -387,12 +422,10 @@ if ('serviceWorker' in navigator) {
 
   // ===== Symbol Utils =====
   function splitSymbol(binanceSym){
-    // "BTCUSDT" -> {base:"BTC", quote:"USDT"}
     const q = ['USDT','USD','BTC','ETH','BUSD','EUR','TRY','USDC'];
     for(const qq of q){
       if(binanceSym.endsWith(qq)) return {base:binanceSym.slice(0, binanceSym.length-qq.length), quote:qq};
     }
-    // fallback
     return {base:binanceSym.slice(0,3), quote:binanceSym.slice(3)};
   }
   function ccInterval(interval){
@@ -414,7 +447,6 @@ if ('serviceWorker' in navigator) {
     const res = await fetch('https://api.binance.com/api/v3/exchangeInfo');
     if(!res.ok){ setStatus('Fehler exchangeInfo: '+res.status,true); return null; }
     exchangeInfo = await res.json();
-    // Aggregiere globale Liste (vorerst Binance-Basis, da robust & vollständig)
     allPairs = exchangeInfo.symbols
       .filter(s=> s.status==='TRADING')
       .map(s=> s.symbol);
@@ -445,7 +477,7 @@ if ('serviceWorker' in navigator) {
       item.dataset.value = sym;
       const {base,quote} = splitSymbol(sym);
       item.innerHTML = `<span>${sym}</span><span style="color:#9aa7b2;font-size:12px">${base}·${quote}</span>`;
-      item.addEventListener('mousedown', (ev)=>{ // mousedown, damit blur nicht vorher schließt
+      item.addEventListener('mousedown', (ev)=>{
         ev.preventDefault();
         pairInput.value = sym;
         closeCombo();
@@ -454,18 +486,11 @@ if ('serviceWorker' in navigator) {
     });
   }
 
-  function openCombo(){
-    pairCombo.classList.add('open');
-    refreshPairsMenu();
-  }
-  function closeCombo(){
-    pairCombo.classList.remove('open');
-  }
+  function openCombo(){ pairCombo.classList.add('open'); refreshPairsMenu(); }
+  function closeCombo(){ pairCombo.classList.remove('open'); }
   pairInput.addEventListener('focus', openCombo);
   pairInput.addEventListener('input', refreshPairsMenu);
-  document.addEventListener('click', (e)=>{
-    if(!pairCombo.contains(e.target)) closeCombo();
-  });
+  document.addEventListener('click', (e)=>{ if(!pairCombo.contains(e.target)) closeCombo(); });
   pairInput.addEventListener('keydown', (e)=>{
     const items = Array.from(pairMenu.querySelectorAll('.combo-item'));
     if(!items.length) return;
@@ -510,7 +535,7 @@ if ('serviceWorker' in navigator) {
   async function fetchCC(symbol, interval, startMs, endMs){
     try{
       const {base, quote} = splitSymbol(symbol);
-      const table = ccInterval(interval); // histominute/histohour/histoday
+      const table = ccInterval(interval);
       const limit = ccLimit(interval, startMs, endMs);
       const url = new URL(`https://min-api.cryptocompare.com/data/v2/${table}`);
       url.searchParams.set('fsym', base);
@@ -521,7 +546,6 @@ if ('serviceWorker' in navigator) {
       if(!res.ok) throw new Error('CC HTTP '+res.status);
       const js = await res.json();
       if(js.Response!=='Success' || !js.Data || !js.Data.Data) return [];
-      // CC liefert OHLC + time (Sekunden)
       return js.Data.Data.map(r=>({
         time: r.time,
         open: +r.open, high:+r.high, low:+r.low, close:+r.close, volume:+(r.volumeto||r.volumefrom||0)
@@ -539,9 +563,8 @@ if ('serviceWorker' in navigator) {
     for(const c of primary){
       out.push(c);
       seen.add(c.time);
-      if(map.has(c.time)) map.delete(c.time); // Duplikat ignorieren (Binance gewinnt)
+      if(map.has(c.time)) map.delete(c.time);
     }
-    // Sekundärdaten hinzufügen, aber sortiert
     for(const [t, c] of map){ if(!seen.has(t)) out.push(c); }
     out.sort((a,b)=>a.time-b.time);
     return out;
@@ -570,10 +593,13 @@ if ('serviceWorker' in navigator) {
         </div>
       </div>
       <div class="pane-body"></div>
+      <div class="pane-macd"></div>
     `;
     panesEl.appendChild(container);
 
     const body = container.querySelector('.pane-body');
+    const macdBody = container.querySelector('.pane-macd');
+
     const chart = LightweightCharts.createChart(body, {
       layout:{ background:{ type:'solid', color:'#0c0f14' }, textColor:getCss('--text') },
       grid:{ vertLines:{ color:getCss('--grid') }, horzLines:{ color:getCss('--grid') } },
@@ -582,22 +608,40 @@ if ('serviceWorker' in navigator) {
       crosshair:{ mode: LightweightCharts.CrosshairMode.Magnet },
     });
 
-    const candleSeries = chart.addCandlestickSeries();
-    const lineSeries = chart.addLineSeries({ priceLineVisible:false, lastValueVisible:true });
+    // Candles with proper colors
+    const candleSeries = chart.addCandlestickSeries({
+      upColor:'#26a69a', downColor:'#ef5350', wickUpColor:'#26a69a', wickDownColor:'#ef5350',
+      borderUpColor:'#26a69a', borderDownColor:'#ef5350'
+    });
+    const lineSeries = chart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color:'#9aa7b2', lineWidth:1 });
     const volSeries = chart.addHistogramSeries({ priceFormat:{ type:'volume' }, priceScaleId:'left', lastValueVisible:false });
 
-    const ma20 = chart.addLineSeries({ priceLineVisible:false });
-    const ma50 = chart.addLineSeries({ priceLineVisible:false });
-    const ema20s = chart.addLineSeries({ priceLineVisible:false });
-    const ema50s = chart.addLineSeries({ priceLineVisible:false });
-    const bbU = chart.addLineSeries({ priceLineVisible:false });
-    const bbM = chart.addLineSeries({ priceLineVisible:false });
-    const bbL = chart.addLineSeries({ priceLineVisible:false });
+    // Styled indicators
+    const ma20 = chart.addLineSeries({ priceLineVisible:false, color:'#00d1ff', lineWidth:2 });
+    const ma50 = chart.addLineSeries({ priceLineVisible:false, color:'#f59e0b', lineWidth:2 });
+    const ema20s = chart.addLineSeries({ priceLineVisible:false, color:'#8b5cf6', lineWidth:2, lineStyle: LightweightCharts.LineStyle.Dashed });
+    const ema50s = chart.addLineSeries({ priceLineVisible:false, color:'#22c55e', lineWidth:2, lineStyle: LightweightCharts.LineStyle.Dashed });
+    const bbU = chart.addLineSeries({ priceLineVisible:false, color:'#64748b', lineWidth:1 });
+    const bbM = chart.addLineSeries({ priceLineVisible:false, color:'#94a3b8', lineWidth:1, lineStyle: LightweightCharts.LineStyle.Dotted });
+    const bbL = chart.addLineSeries({ priceLineVisible:false, color:'#64748b', lineWidth:1 });
 
-    const series = {candles:candleSeries, line:lineSeries, vol:volSeries, ma20, ma50, ema20:ema20s, ema50:ema50s, bbU, bbM, bbL};
+    // MACD mini chart
+    const macdChart = LightweightCharts.createChart(macdBody, {
+      layout:{ background:{ type:'solid', color:'#0c0f14' }, textColor:getCss('--text') },
+      grid:{ vertLines:{ color:getCss('--grid') }, horzLines:{ color:getCss('--grid') } },
+      rightPriceScale:{ borderColor:'#222831' },
+      timeScale:{ borderColor:'#222831', timeVisible:true, secondsVisible:false, visible:true },
+      crosshair:{ mode: LightweightCharts.CrosshairMode.Magnet },
+    });
+    const macdHist = macdChart.addHistogramSeries({ priceFormat:{ type:'price', precision:4, minMove:0.0001 }, lastValueVisible:false });
+    const macdLine = macdChart.addLineSeries({ color:'#4aa3ff', lineWidth:2, priceLineVisible:false });
+    const macdSignal = macdChart.addLineSeries({ color:'#f39c12', lineWidth:2, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible:false });
+
+    const series = {candles:candleSeries, line:lineSeries, vol:volSeries, ma20, ma50, ema20:ema20s, ema50:ema50s, bbU, bbM, bbL,
+                    macd:{chart:macdChart, hist:macdHist, macd:macdLine, signal:macdSignal}};
 
     container.querySelector('.remove').addEventListener('click', ()=>{
-      chart.remove();
+      chart.remove(); macdChart.remove();
       panesEl.removeChild(container);
       charts = charts.filter(c=>c.symbol!==symbol);
       buildTableAndCompare(); persistState();
@@ -622,14 +666,19 @@ if ('serviceWorker' in navigator) {
       if(suppress) return;
       suppress = true;
       charts.forEach(c=>{
-        if(c!==entry && range) c.chart.timeScale().setVisibleLogicalRange({from:range.from, to:range.to});
+        if(c!==entry && range){
+          c.chart.timeScale().setVisibleLogicalRange({from:range.from, to:range.to});
+          c.series.macd.chart.timeScale().setVisibleLogicalRange({from:range.from, to:range.to});
+        }
       });
       suppress = false;
     });
-    entry.chart.subscribeClick(()=>{ entry.chart.timeScale().fitContent(); });
+    entry.chart.subscribeClick(()=>{ entry.chart.timeScale().fitContent(); entry.series.macd.chart.timeScale().fitContent(); });
     window.addEventListener('resize', ()=> {
       const el = entry.container.querySelector('.pane-body');
       entry.chart.applyOptions({ width: el.clientWidth });
+      const el2 = entry.container.querySelector('.pane-macd');
+      entry.series.macd.chart.applyOptions({ width: el2.clientWidth });
     });
   }
 
@@ -660,6 +709,11 @@ if ('serviceWorker' in navigator) {
       e.series.bbM.applyOptions({ visible: showBBEl.checked });
       e.series.bbL.applyOptions({ visible: showBBEl.checked });
       e.series.vol.applyOptions({ visible: showVolEl.checked });
+      // MACD visibility (ganzer Bereich)
+      e.series.macd.macd.applyOptions({ visible: showMACDEl.checked });
+      e.series.macd.signal.applyOptions({ visible: showMACDEl.checked });
+      e.series.macd.hist.applyOptions({ visible: showMACDEl.checked });
+      e.container.querySelector('.pane-macd').style.display = showMACDEl.checked ? 'block' : 'none';
     });
   }
 
@@ -674,7 +728,7 @@ if ('serviceWorker' in navigator) {
     const closes = data.map(c=>({time:c.time, value:c.close}));
     const volume = data.map(c=>({
       time:c.time, value:c.volume,
-      color: c.close>=c.open ? 'rgba(46,204,113,0.7)' : 'rgba(243,156,18,0.7)'
+      color: c.close>=c.open ? 'rgba(46,204,113,0.7)' : 'rgba(239,83,80,0.7)'
     }));
 
     entry.series.candles.setData(data);
@@ -689,6 +743,12 @@ if ('serviceWorker' in navigator) {
     entry.series.bbU.setData(bb.upper);
     entry.series.bbM.setData(bb.middle);
     entry.series.bbL.setData(bb.lower);
+
+    // MACD
+    const m = macdCalc(data,12,26,9);
+    entry.series.macd.macd.setData(m.macd);
+    entry.series.macd.signal.setData(m.signal);
+    entry.series.macd.hist.setData(m.hist);
 
     applyPriceFormat(entry, data[data.length-1].close);
     setStatus(`Fertig: ${entry.symbol} · ${interval} · ${data.length} Kerzen (gemergt)`);
@@ -716,6 +776,7 @@ if ('serviceWorker' in navigator) {
     if(!isFinite(tMin) || !isFinite(tMax)) return;
     charts.forEach(c=>{
       c.chart.timeScale().setVisibleRange({ from: tMin, to: tMax });
+      c.series.macd.chart.timeScale().setVisibleRange({ from: tMin, to: tMax });
     });
   }
 
@@ -731,7 +792,7 @@ if ('serviceWorker' in navigator) {
         symbols: charts.map(c=>c.symbol),
         toggles:{
           line: showLineEl.checked, candles: showCandlesEl.checked, ma20: showMA20El.checked, ma50: showMA50El.checked,
-          ema20: showEMA20El.checked, ema50: showEMA50El.checked, bb: showBBEl.checked, vol: showVolEl.checked
+          ema20: showEMA20El.checked, ema50: showEMA50El.checked, bb: showBBEl.checked, vol: showVolEl.checked, macd: showMACDEl.checked
         }
       };
       localStorage.setItem('kca_state_v4', JSON.stringify(st));
@@ -776,9 +837,10 @@ if ('serviceWorker' in navigator) {
     }
     return result;
   }
+
   function buildTableAndCompare(){
     const times = getBucketTimes();
-    if(!times.length){ perfHeadRow.innerHTML=''; perfBody.innerHTML=''; return; }
+    if(!times.length){ perfHeadRow.innerHTML=''; perfBody.innerHTML=''; lastTSV=''; return; }
     perfHeadRow.innerHTML = '';
     const thCoin = document.createElement('th'); thCoin.textContent = 'Coin'; perfHeadRow.appendChild(thCoin);
     const thStart = document.createElement('th'); thStart.textContent = 'Startpreis'; perfHeadRow.appendChild(thStart);
@@ -789,6 +851,11 @@ if ('serviceWorker' in navigator) {
       perfHeadRow.appendChild(th);
     }
     perfBody.innerHTML = '';
+
+    // Build TSV header for Excel (tab-separated, dot decimals)
+    const headerCells = Array.from(perfHeadRow.children).map(th=>th.textContent);
+    const tsvRows = [headerCells.join('\t')];
+
     const seriesForCmp = [];
     for(const c of charts){
       const row = document.createElement('tr');
@@ -802,6 +869,8 @@ if ('serviceWorker' in navigator) {
       tdStart.textContent = (startPrice!=null) ? startPrice.toFixed(c.pricePrecision) : '-';
       row.appendChild(tdStart);
 
+      const tsvRow = [c.symbol, (startPrice!=null)? startPrice.toFixed(c.pricePrecision) : ''];
+
       const cmpPoints = [];
       let prev = startPrice;
       for(let i=1;i<times.length;i++){
@@ -809,18 +878,23 @@ if ('serviceWorker' in navigator) {
         const td = document.createElement('td');
         if(v!=null && prev!=null && prev>0){
           const pct = ((v - prev)/prev)*100;
-          td.textContent = pct.toFixed(2);
+          const pctNum = +pct.toFixed(4);
+          td.textContent = pctNum.toFixed(2); // ohne % -> Excel-freundlich
           td.className = (pct>=0) ? 'pos' : 'neg';
-          cmpPoints.push({time: times[i], value: +pct.toFixed(4)});
+          cmpPoints.push({time: times[i], value: pctNum});
           prev = v;
+          tsvRow.push(pctNum.toString());
         } else {
           td.textContent = '-';
+          tsvRow.push('');
         }
         row.appendChild(td);
       }
       perfBody.appendChild(row);
       seriesForCmp.push({symbol:c.symbol, data:cmpPoints});
+      tsvRows.push(tsvRow.join('\t'));
     }
+    lastTSV = tsvRows.join('\n');
     buildCompareChart(seriesForCmp);
   }
 
@@ -835,7 +909,7 @@ if ('serviceWorker' in navigator) {
     });
     const palette = ['#4aa3ff','#2ecc71','#f39c12','#e74c3c','#9b59b6','#1abc9c','#e67e22','#e84393','#16a085','#d35400'];
     seriesList.forEach((s,idx)=>{
-      const ls = cmpChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length] });
+      const ls = cmpChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length], lineWidth:2 });
       ls.setData(s.data);
     });
   }
@@ -850,12 +924,16 @@ if ('serviceWorker' in navigator) {
     });
     const palette = ['#4aa3ff','#2ecc71','#f39c12','#e74c3c','#9b59b6','#1abc9c','#e67e22','#e84393','#16a085','#d35400'];
     seriesList.forEach((s,idx)=>{
-      const ls = cmpFSChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length] });
+      const ls = cmpFSChart.addLineSeries({ priceLineVisible:false, lastValueVisible:true, color: palette[idx%palette.length], lineWidth:2 });
       ls.setData(s.data);
     });
   }
 
   // ===== Fullscreen handling =====
+  let fsMode = 'all';
+  let fsIndex = 0;
+  let parked = [];
+
   function openFs(mode){
     if(!charts.length) return;
     fsMode = mode; fsIndex = Math.max(0, Math.min(fsIndex, charts.length-1));
@@ -868,6 +946,8 @@ if ('serviceWorker' in navigator) {
       fsGrid.appendChild(c.container);
       const el = c.container.querySelector('.pane-body');
       c.chart.applyOptions({ width: el.clientWidth });
+      const el2 = c.container.querySelector('.pane-macd');
+      c.series.macd.chart.applyOptions({ width: el2.clientWidth });
     });
     if(mode==='all'){ renderFsAll(); } else { renderFsSingle(); }
   }
@@ -879,6 +959,8 @@ if ('serviceWorker' in navigator) {
     charts.forEach(c=>{
       const el = c.container.querySelector('.pane-body');
       c.chart.applyOptions({ width: el.clientWidth });
+      const el2 = c.container.querySelector('.pane-macd');
+      c.series.macd.chart.applyOptions({ width: el2.clientWidth });
     });
   }
   function renderFsAll(){
@@ -908,7 +990,7 @@ if ('serviceWorker' in navigator) {
     } else {
       fsGrid.style.display='grid'; fsGrid.classList.add('gridAdaptive');
     }
-    charts.forEach(c=>{ c.container.style.gridColumn=''; c.container.style.gridRow=''; });
+    charts.forEach(c=>{ c.container.style.gridColumn=''; c.container.style.gridRow=''; c.container.style.display='block'; });
   }
   function renderFsSingle(){
     fsMode = 'single';
@@ -921,6 +1003,8 @@ if ('serviceWorker' in navigator) {
     cur.container.style.display='block';
     const el = cur.container.querySelector('.pane-body');
     cur.chart.applyOptions({ width: el.clientWidth });
+    const el2 = cur.container.querySelector('.pane-macd');
+    cur.series.macd.chart.applyOptions({ width: el2.clientWidth });
   }
   function fsNext(){ fsIndex = (fsIndex+1)%charts.length; renderFsSingle(); }
   function fsPrev(){ fsIndex = (fsIndex-1+charts.length)%charts.length; renderFsSingle(); }
@@ -951,7 +1035,7 @@ if ('serviceWorker' in navigator) {
     }catch(e){ setStatus('Fehler: '+(e?.message||e), true); }
   });
 
-  [showLineEl, showCandlesEl, showMA20El, showMA50El, showEMA20El, showEMA50El, showBBEl, showVolEl].forEach(el=>{
+  [showLineEl, showCandlesEl, showMA20El, showMA50El, showEMA20El, showEMA50El, showBBEl, showVolEl, showMACDEl].forEach(el=>{
     el.addEventListener('change', ()=>{ applyVisibility(); persistState(); });
   });
 
@@ -965,8 +1049,39 @@ if ('serviceWorker' in navigator) {
   });
   (function(){ const custom = rangeEl.value==='custom'; startEl.style.display = endEl.style.display = custom ? 'inline-block' : 'none'; })();
 
-  fitBtn.addEventListener('click', ()=>{ fitAllSync(); });
+  // Reset (wirklich alles löschen)
+  function resetAll(){
+    try{
+      charts.forEach(c=>{ try{c.chart.remove();}catch{} try{c.series.macd.chart.remove();}catch{} });
+      panesEl.innerHTML = '';
+      charts = [];
+      perfHeadRow.innerHTML=''; perfBody.innerHTML='';
+      if(cmpChart){ try{cmpChart.remove();}catch{} cmpChart=null; }
+      if(cmpFSChart){ try{cmpFSChart.remove();}catch{} cmpFSChart=null; }
+      localStorage.removeItem('kca_state_v4');
+      lastTSV='';
+      setStatus('Alles zurückgesetzt.');
+    }catch(e){ setStatus('Reset-Fehler: '+(e?.message||e), true); }
+  }
+  fitBtn.addEventListener('click', resetAll);
+
   reloadBtn.addEventListener('click', ()=>{ reloadAll().catch(e=>setStatus('Fehler: '+e.message,true)); });
+
+  // Clipboard Export (Excel-freundlich TSV)
+  async function copyTableToClipboard(){
+    if(!lastTSV){ setStatus('Keine Daten zum Kopieren.', true); return; }
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(lastTSV);
+      }else{
+        const ta = document.createElement('textarea');
+        ta.value = lastTSV; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      setStatus('Tabelle (Δ% je Intervall) kopiert – einfach in Excel einfügen.');
+    }catch(e){ setStatus('Kopier-Fehler: '+(e?.message||e), true); }
+  }
+  copyTableBtn.addEventListener('click', copyTableToClipboard);
 
   // Compare chart controls
   cmpReloadBtn.addEventListener('click', buildTableAndCompare);
@@ -987,6 +1102,7 @@ if ('serviceWorker' in navigator) {
       }
       seriesForCmp.push({symbol:c.symbol, data:pts});
     }
+    if(!seriesForCmp.length){ setStatus('Keine Serien für Vergleich vorhanden.', true); return; }
     fsCmp.classList.add('show');
     buildCompareFS(seriesForCmp);
   });
@@ -995,10 +1111,22 @@ if ('serviceWorker' in navigator) {
     if(cmpFSChart){ cmpFSChart.remove(); cmpFSChart=null; }
   });
 
+  // Wire Fullscreen header buttons + overlay controls
+  fsAllBtn.addEventListener('click', ()=>openFs('all'));
+  fsSingleBtn.addEventListener('click', ()=>openFs('single'));
+  fsPrevBtn.addEventListener('click', fsPrev);
+  fsNextBtn.addEventListener('click', fsNext);
+  fsCloseBtn.addEventListener('click', closeFs);
+  fsModeAllBtn.addEventListener('click', renderFsAll);
+  fsModeSingleBtn.addEventListener('click', renderFsSingle);
+  fsPrev2.addEventListener('click', fsPrev);
+  fsNext2.addEventListener('click', fsNext);
+  fsClose2.addEventListener('click', closeFs);
+
   // ===== Init =====
   (async function init(){
     try{
-      await loadExchangeInfo();          // füllt allPairs (Binance)
+      await loadExchangeInfo();
       refreshPairsMenu();
 
       const st = restoreState();
@@ -1018,6 +1146,7 @@ if ('serviceWorker' in navigator) {
           showEMA50El.checked = !!st.toggles.ema50;
           showBBEl.checked = !!st.toggles.bb;
           showVolEl.checked = !!st.toggles.vol;
+          if('macd' in st.toggles) showMACDEl.checked = !!st.toggles.macd;
         }
         refreshPairsMenu();
         if(Array.isArray(st.symbols) && st.symbols.length){
@@ -1051,6 +1180,8 @@ if ('serviceWorker' in navigator) {
       window.addEventListener('orientationchange', ()=>{ setTimeout(()=>charts.forEach(c=>{
         const el = c.container.querySelector('.pane-body');
         c.chart.applyOptions({ width: el.clientWidth });
+        const el2 = c.container.querySelector('.pane-macd');
+        c.series.macd.chart.applyOptions({ width: el2.clientWidth });
       }), 300); });
 
       applyVisibility();
